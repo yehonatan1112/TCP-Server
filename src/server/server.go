@@ -38,7 +38,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 		} else if strings.HasPrefix(msg, "CONSUME") {
 			s.handleConsume(conn)
 		} else {
-			s.sendError(conn, "ERROR: Invalid message format")
+			s.sendResponse(conn, "ERROR: Invalid message format")
 		}
 	}
 }
@@ -48,12 +48,12 @@ func (s *Server) handlePublish(conn net.Conn, msg string) {
 	defer s.mu.Unlock()
 
 	if len(msg) > maxMessageSize {
-		s.sendError(conn, "ERROR: Message too large")
+		s.sendResponse(conn, "ERROR: Message too large")
 		return
 	}
 
 	if s.message != "" {
-		s.sendError(conn, "ERROR: occupied")
+		s.sendResponse(conn, "ERROR: occupied")
 		return
 	}
 
@@ -66,7 +66,7 @@ func (s *Server) handleConsume(conn net.Conn) {
 	defer s.mu.Unlock()
 
 	if s.message == "" {
-		s.sendError(conn, "ERROR: no message")
+		s.sendResponse(conn, "ERROR: no message")
 		return
 	}
 
@@ -76,16 +76,9 @@ func (s *Server) handleConsume(conn net.Conn) {
 }
 
 func (s *Server) sendResponse(conn net.Conn, msg string) {
-	_, err := conn.Write([]byte(msg + "\n")) // Send newline-terminated message
+	_, err := conn.Write([]byte(msg + "\n"))
 	if err != nil {
 		fmt.Println("Error sending response:", err)
-	}
-}
-
-func (s *Server) sendError(conn net.Conn, errMsg string) {
-	_, err := conn.Write([]byte(errMsg + "\n")) // Send newline-terminated error message
-	if err != nil {
-		fmt.Println("Error sending error message:", err)
 	}
 }
 
