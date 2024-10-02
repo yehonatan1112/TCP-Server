@@ -9,28 +9,37 @@ import (
 
 const (
 	maxMessageSize = 10240 // 10KB
+	maxMessages    = 100   // Maximum number of stored messages
 )
 
 type Server struct {
-	mu      sync.Mutex
-	message string
+	mu       sync.Mutex
+	messages []string          // Queue to store messages
+	cond     *sync.Cond        // Condition variable to wait for messages
+	waiting  map[net.Conn]bool // Track clients waiting for messages
 }
 
 func NewServer() *Server {
-	return &Server{}
+	s := &Server{
+		messages: []string{},
+		waiting:  make(map[net.Conn]bool),
+	}
+	s.cond = sync.NewCond(&s.mu) // Initialize the condition variable
+	return s
 }
 
 func (s *Server) handleConnection(conn net.Conn) {
+	defer conn.Close()
 	buffer := make([]byte, maxMessageSize)
 
 	for {
 		n, err := conn.Read(buffer)
 		if err != nil {
 			fmt.Println("Error reading:", err)
-			return // Exit the loop if there's an error
+			return
 		}
 
-		msg := string(buffer[:n])
+		msg := strings.TrimSpace(string(buffer[:n]))
 		fmt.Printf("Received message: %s\n", msg)
 
 		if strings.HasPrefix(msg, "PUBLISH ") {
@@ -52,27 +61,45 @@ func (s *Server) handlePublish(conn net.Conn, msg string) {
 		return
 	}
 
-	if s.message != "" {
-		s.sendResponse(conn, "ERROR: occupied")
+	if len(s.messages) >= maxMessages {
+		s.sendResponse(conn, "ERROR: Message queue full")
 		return
 	}
 
-	s.message = msg
-	s.sendResponse(conn, "SUCCESS: Message published")
+	// Add message to queue
+	s.messages = append(s.messages, msg)
+	fmt.Printf("Message published: %s\n", msg)
+
+	// Notify any waiting clients
+	if len(s.waiting) > 0 {
+		for conn := range s.waiting {
+			if len(s.messages) > 0 {
+				s.sendResponse(conn, "SUCCESS: "+s.messages[0])
+				s.messages = s.messages[1:] // Remove the consumed message from the queue
+				delete(s.waiting, conn)     // Stop waiting for this client
+				conn.Close()                // Close the connection after sending
+				break
+			}
+		}
+	} else {
+		s.sendResponse(conn, "SUCCESS: Message published")
+	}
 }
 
 func (s *Server) handleConsume(conn net.Conn) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.message == "" {
-		s.sendResponse(conn, "ERROR: no message")
-		return
+	if len(s.messages) > 0 {
+		// Send the first message in the queue
+		s.sendResponse(conn, "SUCCESS: "+s.messages[0])
+		s.messages = s.messages[1:] // Remove the message from the queue
+		conn.Close()                // Close connection after sending
+	} else {
+		// No message available, wait for a message to be published
+		fmt.Println("No messages available, client waiting...")
+		s.waiting[conn] = true
 	}
-
-	response := fmt.Sprintf("SUCCESS: %s", s.message)
-	s.sendResponse(conn, response)
-	s.message = "" // Clear the message after consumption
 }
 
 func (s *Server) sendResponse(conn net.Conn, msg string) {
