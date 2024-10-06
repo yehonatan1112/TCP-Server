@@ -9,15 +9,20 @@ import (
 
 const (
 	maxMessageSize = 10240 // 10KB
+	maxMessages    = 100   // Max number of messages the server can store
 )
 
 type Server struct {
-	mu      sync.Mutex
-	message string
+	mu        sync.Mutex
+	messages  []string      // Slice to store messages
+	consumeCh chan net.Conn // Channel to queue consumers waiting for messages
 }
 
 func NewServer() *Server {
-	return &Server{}
+	return &Server{
+		messages:  make([]string, 0, maxMessages),
+		consumeCh: make(chan net.Conn, 100), // Channel to queue consumers waiting for messages
+	}
 }
 
 func (s *Server) handleConnection(conn net.Conn) {
@@ -38,7 +43,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 		} else if strings.HasPrefix(msg, "CONSUME") {
 			s.handleConsume(conn)
 		} else {
-			s.sendResponse(conn, "ERROR: Invalid message format")
+			s.sendError(conn, "ERROR: Invalid message format")
 		}
 	}
 }
@@ -48,37 +53,68 @@ func (s *Server) handlePublish(conn net.Conn, msg string) {
 	defer s.mu.Unlock()
 
 	if len(msg) > maxMessageSize {
-		s.sendResponse(conn, "ERROR: Message too large")
+		s.sendError(conn, "ERROR: Message too large")
 		return
 	}
 
-	if s.message != "" {
-		s.sendResponse(conn, "ERROR: occupied")
+	if len(s.messages) >= maxMessages {
+		s.sendError(conn, "ERROR: occupied")
 		return
 	}
 
-	s.message = msg
+	// Append the message to the queue
+	s.messages = append(s.messages, msg)
 	s.sendResponse(conn, "SUCCESS: Message published")
+
+	// Notify any waiting consumer that a new message is available
+	select {
+	case consumerConn := <-s.consumeCh:
+		s.sendNextMessage(consumerConn)
+	default:
+		// No consumer waiting, nothing to do
+	}
 }
 
 func (s *Server) handleConsume(conn net.Conn) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.message == "" {
-		s.sendResponse(conn, "ERROR: no message")
+	// Check if there's a message to consume
+	if len(s.messages) > 0 {
+		s.sendNextMessage(conn)
+	} else {
+		// No message, add the connection to the waiting queue
+		go func() {
+			s.consumeCh <- conn
+		}()
+	}
+}
+
+func (s *Server) sendNextMessage(conn net.Conn) {
+	if len(s.messages) == 0 {
+		s.sendError(conn, "ERROR: no message")
 		return
 	}
 
-	response := fmt.Sprintf("SUCCESS: %s", s.message)
+	// Pop the first message from the queue and send it
+	msg := s.messages[0]
+	s.messages = s.messages[1:]
+	response := fmt.Sprintf("SUCCESS: %s", msg)
 	s.sendResponse(conn, response)
-	s.message = "" // Clear the message after consumption
+	conn.Close() // Close connection after sending the message
 }
 
 func (s *Server) sendResponse(conn net.Conn, msg string) {
-	_, err := conn.Write([]byte(msg + "\n"))
+	_, err := conn.Write([]byte(msg + "\n")) // Send newline-terminated message
 	if err != nil {
 		fmt.Println("Error sending response:", err)
+	}
+}
+
+func (s *Server) sendError(conn net.Conn, errMsg string) {
+	_, err := conn.Write([]byte(errMsg + "\n")) // Send newline-terminated error message
+	if err != nil {
+		fmt.Println("Error sending error message:", err)
 	}
 }
 
