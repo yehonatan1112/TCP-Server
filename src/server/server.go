@@ -25,25 +25,64 @@ func NewServer() *Server {
 	}
 }
 
+
 func (s *Server) handleConnection(conn net.Conn) {
+	defer conn.Close() // Close the connection at the end
+
 	buffer := make([]byte, maxMessageSize)
 
+	n, err := conn.Read(buffer)
+	if err != nil {
+		fmt.Println("Error reading:", err)
+		return
+	}
+
+	// Convert buffer to a string
+	input := string(buffer[:n])
+
 	for {
-		n, err := conn.Read(buffer)
-		if err != nil {
-			fmt.Println("Error reading:", err)
-			return // Exit the loop if there's an error
+		if len(input) == 0 {
+			break // No more data to process
 		}
 
-		msg := string(buffer[:n])
-		fmt.Printf("Received message: %s\n", msg)
+		var command string
+		var message string
 
-		if strings.HasPrefix(msg, "PUBLISH ") {
-			s.handlePublish(conn, msg[8:]) // Extract the message after "PUBLISH "
-		} else if strings.HasPrefix(msg, "CONSUME") {
-			s.handleConsume(conn)
+		// Check if the input starts with "PUBLISH"
+		if strings.HasPrefix(input, "PUBLISH ") {
+			// Find where the command ends
+			endIdx := strings.Index(input, "\n")
+			if endIdx == -1 {
+				endIdx = len(input) // No newline means until the end of the input
+			}
+			command = "PUBLISH"
+			message = input[8:endIdx] // Extract the message after "PUBLISH "
+			input = input[endIdx:]    // Update input to remove the processed command
+		} else if strings.HasPrefix(input, "CONSUME") {
+			command = "CONSUME"
+			endIdx := strings.Index(input, "\n")
+			if endIdx == -1 {
+				endIdx = len(input) // No newline means until the end of the input
+			}
+			input = input[endIdx:] // Update input to remove the processed command
 		} else {
 			s.sendError(conn, "ERROR: Invalid message format")
+			break
+		}
+
+		// Process the command based on its type
+		switch command {
+		case "PUBLISH":
+			// Check for empty message
+			if strings.TrimSpace(message) == "" {
+				s.sendError(conn, "ERROR: Empty message")
+			} else {
+				// Handle the publish logic
+				s.handlePublish(message)
+				s.sendResponse(conn, "SUCCESS: Message published")
+			}
+		case "CONSUME":
+			s.handleConsume(conn)
 		}
 	}
 }
