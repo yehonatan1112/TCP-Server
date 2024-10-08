@@ -9,56 +9,26 @@ import (
 )
 
 func main() {
-	// Connect to the TCP server
+	// Connect to the server
 	conn, err := net.Dial("tcp", "localhost:8080")
 	if err != nil {
-		fmt.Println("Error connecting to server:", err)
+		fmt.Println("Error connecting:", err)
 		return
 	}
 	defer conn.Close()
 
-	// Create a reader for user input
 	reader := bufio.NewReader(os.Stdin)
+	fmt.Print("Enter command (PUBLISH/CONSUME): ")
+	text, _ := reader.ReadString('\n')
+	text = strings.TrimSpace(text)
 
-	for {
-		// Read user input
-		fmt.Print("Enter message (PUBLISH <msg> or CONSUME): ")
-		text, _ := reader.ReadString('\n')
-		text = strings.TrimSpace(text)
+	// Write the message to the server
+	fmt.Fprintf(conn, text+"\n")
 
-		if strings.HasPrefix(text, "PUBLISH ") {
-			// Send PUBLISH message to the server
-			_, err := conn.Write([]byte(text + "\n"))
-			if err != nil {
-				fmt.Println("Error writing to server:", err)
-				break
-			}
+	// Close the write side of the connection after sending the message
+	conn.(*net.TCPConn).CloseWrite()
 
-			// Close the writing end after sending the PUBLISH message
-			err = conn.(*net.TCPConn).CloseWrite()
-			if err != nil {
-				fmt.Println("Error closing the write connection:", err)
-				break
-			}
-		} else if text == "CONSUME" {
-			// Send CONSUME message to the server
-			_, err := conn.Write([]byte(text + "\n"))
-			if err != nil {
-				fmt.Println("Error writing to server:", err)
-				break
-			}
-		} else {
-			fmt.Println("Invalid input. Please enter PUBLISH <msg> or CONSUME.")
-			continue
-		}
-
-		// Read response from server
-		serverResponse, err := bufio.NewReader(conn).ReadString('\n')
-		if err != nil {
-			fmt.Println("Error reading from server:", err)
-			break
-		}
-
-		fmt.Print("Server response: " + serverResponse)
-	}
+	// Listen for the server's response
+	response, _ := bufio.NewReader(conn).ReadString('\n')
+	fmt.Print("Response from server: " + response)
 }
