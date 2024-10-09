@@ -1,4 +1,4 @@
-package client
+package main
 
 import (
 	"bufio"
@@ -8,38 +8,46 @@ import (
 	"strings"
 )
 
-func StartClient(serverAddress string) {
-	conn, err := net.Dial("tcp", serverAddress)
-	if err != nil {
-		fmt.Println("Error connecting to server:", err)
-		return
-	}
-	defer conn.Close()
-
-	reader := bufio.NewReader(os.Stdin)
+func main() {
 	for {
-		fmt.Print("Enter command (PUBLISH <message> or CONSUME): ")
+		// Read input from the user (PUBLISH or CONSUME)
+		reader := bufio.NewReader(os.Stdin)
+		fmt.Print("Enter PUBLISH <message> or CONSUME: ")
 		input, _ := reader.ReadString('\n')
-		input = strings.TrimSpace(input)
+		input = strings.TrimSpace(input) // Remove trailing newline and spaces
 
-		if strings.HasPrefix(input, "PUBLISH") || strings.HasPrefix(input, "CONSUME") {
-			// Send input to server
-			_, err := conn.Write([]byte(input + "\n")) // Add newline for server read consistency
-			if err != nil {
-				fmt.Println("Error sending data:", err)
-				return
-			}
-
-			// Receive response from server
-			response, err := bufio.NewReader(conn).ReadString('\n') // Read server response until newline
-			if err != nil {
-				fmt.Println("Error reading response:", err)
-				return
-			}
-
-			fmt.Println("Server response:", strings.TrimSpace(response))
-		} else {
-			fmt.Println("Invalid command. Use PUBLISH <message> or CONSUME.")
+		// Create a connection to the server
+		conn, err := net.Dial("tcp", "localhost:8080")
+		if err != nil {
+			fmt.Println("Error connecting to server:", err)
+			return
 		}
+
+		// Send the message to the server
+		_, err = conn.Write([]byte(input + "\n"))
+		if err != nil {
+			fmt.Println("Error writing to server:", err)
+			conn.Close()
+			continue
+		}
+
+		// Close the write side of the connection to indicate end of message
+		err = conn.CloseWrite()
+		if err != nil {
+			fmt.Println("Error closing write connection:", err)
+			conn.Close()
+			continue
+		}
+
+		// Wait for the server's response
+		response, err := bufio.NewReader(conn).ReadString('\n')
+		if err != nil {
+			fmt.Println("Error reading from server:", err)
+		} else {
+			fmt.Println("Server response:", strings.TrimSpace(response))
+		}
+
+		// Close the connection
+		conn.Close()
 	}
 }
