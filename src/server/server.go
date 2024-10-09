@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bufio"
 	"fmt"
 	"net"
 	"strings"
@@ -25,64 +26,26 @@ func NewServer() *Server {
 	}
 }
 
-
 func (s *Server) handleConnection(conn net.Conn) {
-	defer conn.Close() // Close the connection at the end
+	defer conn.Close() // Close the connection at the very end
 
-	buffer := make([]byte, maxMessageSize)
-
-	n, err := conn.Read(buffer)
-	if err != nil {
-		fmt.Println("Error reading:", err)
-		return
-	}
-
-	// Convert buffer to a string
-	input := string(buffer[:n])
-
+	reader := bufio.NewReader(conn)
 	for {
-		if len(input) == 0 {
-			break // No more data to process
+		// Reading the buffer line by line
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			fmt.Println("Error reading:", err)
+			return
 		}
+		line = strings.TrimSpace(line) // Remove trailing newline
+		fmt.Printf("Received message: %s\n", line)
 
-		var command string
-		var message string
-
-		// Check if the input starts with "PUBLISH"
-		if strings.HasPrefix(input, "PUBLISH ") {
-			// Find where the command ends
-			endIdx := strings.Index(input, "\n")
-			if endIdx == -1 {
-				endIdx = len(input) // No newline means until the end of the input
-			}
-			command = "PUBLISH"
-			message = input[8:endIdx] // Extract the message after "PUBLISH "
-			input = input[endIdx:]    // Update input to remove the processed command
-		} else if strings.HasPrefix(input, "CONSUME") {
-			command = "CONSUME"
-			endIdx := strings.Index(input, "\n")
-			if endIdx == -1 {
-				endIdx = len(input) // No newline means until the end of the input
-			}
-			input = input[endIdx:] // Update input to remove the processed command
+		if strings.HasPrefix(line, "PUBLISH ") {
+			s.handlePublish(conn, line[8:]) // Extract the message after "PUBLISH "
+		} else if strings.HasPrefix(line, "CONSUME") {
+			s.handleConsume(conn)
 		} else {
 			s.sendError(conn, "ERROR: Invalid message format")
-			break
-		}
-
-		// Process the command based on its type
-		switch command {
-		case "PUBLISH":
-			// Check for empty message
-			if strings.TrimSpace(message) == "" {
-				s.sendError(conn, "ERROR: Empty message")
-			} else {
-				// Handle the publish logic
-				s.handlePublish(message)
-				s.sendResponse(conn, "SUCCESS: Message published")
-			}
-		case "CONSUME":
-			s.handleConsume(conn)
 		}
 	}
 }
@@ -91,11 +54,19 @@ func (s *Server) handlePublish(conn net.Conn, msg string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// Handle empty message
+	if msg == "" {
+		s.sendError(conn, "ERROR: Cannot publish an empty message")
+		return
+	}
+
+	// Check buffer overflow (maxMessageSize limit)
 	if len(msg) > maxMessageSize {
 		s.sendError(conn, "ERROR: Message too large")
 		return
 	}
 
+	// Check if server is full
 	if len(s.messages) >= maxMessages {
 		s.sendError(conn, "ERROR: occupied")
 		return
@@ -146,26 +117,14 @@ func (s *Server) sendResponse(conn net.Conn, msg string) {
 	_, err := conn.Write([]byte(msg + "\n")) // Send newline-terminated message
 	if err != nil {
 		fmt.Println("Error sending response:", err)
-		conn.Close() // Ensure connection is closed in case of write error
-		return
 	}
-
-	go func() {
-		conn.Close() // Close the connection only after ensuring write is successful
-	}()
 }
 
 func (s *Server) sendError(conn net.Conn, errMsg string) {
 	_, err := conn.Write([]byte(errMsg + "\n")) // Send newline-terminated error message
 	if err != nil {
 		fmt.Println("Error sending error message:", err)
-		conn.Close() // Ensure connection is closed in case of error
-		return
 	}
-
-	go func() {
-		conn.Close() // Ensure connection is closed after sending error
-	}()
 }
 
 func (s *Server) Start(port string) {
