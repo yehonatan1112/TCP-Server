@@ -27,26 +27,29 @@ func NewServer() *Server {
 }
 
 func (s *Server) handleConnection(conn net.Conn) {
-	defer conn.Close() // Close the connection at the very end
+	defer conn.Close() // Ensure the connection is closed after handling
 
+	// Read the entire incoming message since the client closes the connection after sending
 	reader := bufio.NewReader(conn)
-	for {
-		// Reading the buffer line by line
-		line, err := reader.ReadString('\n')
-		if err != nil {
-			fmt.Println("Error reading:", err)
-			return
-		}
-		line = strings.TrimSpace(line) // Remove trailing newline
-		fmt.Printf("Received message: %s\n", line)
-
-		if strings.HasPrefix(line, "PUBLISH ") {
-			s.handlePublish(conn, line[8:]) // Extract the message after "PUBLISH "
-		} else if strings.HasPrefix(line, "CONSUME") {
-			s.handleConsume(conn)
+	line, err := reader.ReadString('\n') // Read until newline or EOF
+	if err != nil {
+		if err.Error() == "EOF" {
+			fmt.Println("Client closed the connection")
 		} else {
-			s.sendError(conn, "ERROR: Invalid message format")
+			fmt.Println("Error reading:", err)
 		}
+		return
+	}
+	line = strings.TrimSpace(line) // Remove trailing newline
+
+	// Determine the message type based on the line received
+	fmt.Printf("Received message: %s\n", line)
+	if strings.HasPrefix(line, "PUBLISH ") {
+		s.handlePublish(conn, line[8:]) // Extract the message after "PUBLISH "
+	} else if strings.HasPrefix(line, "CONSUME") {
+		s.handleConsume(conn)
+	} else {
+		s.sendError(conn, "ERROR: Invalid message format")
 	}
 }
 
@@ -68,7 +71,7 @@ func (s *Server) handlePublish(conn net.Conn, msg string) {
 
 	// Check if server is full
 	if len(s.messages) >= maxMessages {
-		s.sendError(conn, "ERROR: occupied")
+		s.sendError(conn, "ERROR: Server is full")
 		return
 	}
 
@@ -102,7 +105,7 @@ func (s *Server) handleConsume(conn net.Conn) {
 
 func (s *Server) sendNextMessage(conn net.Conn) {
 	if len(s.messages) == 0 {
-		s.sendError(conn, "ERROR: no message")
+		s.sendError(conn, "ERROR: No message to consume")
 		return
 	}
 
@@ -142,6 +145,6 @@ func (s *Server) Start(port string) {
 			fmt.Println("Error accepting connection:", err)
 			continue
 		}
-		go s.handleConnection(conn)
+		go s.handleConnection(conn) // Handle each connection concurrently
 	}
 }
